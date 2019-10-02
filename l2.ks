@@ -12,9 +12,13 @@ function main {
     }
 
     doShutdown().
-    
+    set mapview to true.
     doCircularization().  
-    
+    doTransfer().
+    set mapview to false.
+
+    doHoverslam().
+
     wait until false. 
 }
 
@@ -37,6 +41,76 @@ function protectFromPast {
     }.
 
     return replacementFn@.
+}
+
+function doTransfer {
+  local startSearchTime is ternarySearch(
+    angleToMun@,
+    time:seconds + 30, 
+    time:seconds + 30 + orbit:period,
+    1
+  ).
+  local transfer is list(startSearchTime, 0, 0, 0).
+  set transfer to improveConverge(transfer, protectFromPast(munTransferScore@)).
+  executeManeuver(transfer).
+  wait 1.
+  warpto(time:seconds + obt:nextPatchEta - 5).
+  wait until body = Mun.
+  wait 1.
+}
+
+function angleToMun {
+  parameter t.
+  return vectorAngle(
+    Kerbin:position - positionAt(ship, t),
+    Kerbin:position - positionAt(Mun, t)
+  ).
+}
+
+function munTransferScore {
+  parameter data.
+  local mnv is node(data[0], data[1], data[2], data[3]).
+  addManeuverToFlightPlan(mnv).
+  local result is 0.
+  if mnv:orbit:hasNextPatch {
+    set result to mnv:orbit:nextPatch:periapsis.
+  } else {
+    set result to distanceToMunAtApoapsis(mnv).
+  }
+  removeManeuverFromFlightPlan(mnv).
+  return result.
+}
+
+function distanceToMunAtApoapsis {
+  parameter mnv.
+  local apoapsisTime is ternarySearch(
+    altitudeAt@, 
+    time:seconds + mnv:eta, 
+    time:seconds + mnv:eta + (mnv:orbit:period / 2),
+    1
+  ).
+  return (positionAt(ship, apoapsisTime) - positionAt(Mun, apoapsisTime)):mag.
+}
+
+function altitudeAt {
+  parameter t.
+  return Kerbin:altitudeOf(positionAt(ship, t)).
+}
+
+function ternarySearch {
+  parameter f, left, right, absolutePrecision.
+  until false {
+    if abs(right - left) < absolutePrecision {
+      return (left + right) / 2.
+    }
+    local leftThird is left + (right - left) / 3.
+    local rightThird is right - (right - left) / 3.
+    if f(leftThird) < f(rightThird) {
+      set left to leftThird.
+    } else {
+      set right to rightThird.
+    }
+  }
 }
 
 function improveConverge {
@@ -215,6 +289,50 @@ function doJettisonFairing {
 function doSafeStage {
     wait until stage:ready.
     stage.
+}
+
+function doHoverslam {
+  lock steering to srfRetrograde.
+  lock pct to stoppingDistance() / distanceToGround().
+  set warp to 4.
+  wait until pct > 0.1.
+  set warp to 3.
+  wait until pct > 0.4.
+  set warp to 0.
+  wait until pct > 1.
+  lock throttle to pct.
+  when distanceToGround() < 500 then { gear on. }
+  wait until ship:verticalSpeed > 0.
+  lock throttle to 0.
+  lock steering to groundSlope().
+  wait 30.
+  unlock steering.
+}
+
+function distanceToGround {
+  return altitude - body:geopositionOf(ship:position):terrainHeight - 4.7.
+}
+
+function stoppingDistance {
+  local grav is constant():g * (body:mass / body:radius^2).
+  local maxDeceleration is (ship:availableThrust / ship:mass) - grav.
+  return ship:verticalSpeed^2 / (2 * maxDeceleration).
+}
+
+function groundSlope {
+  local east is vectorCrossProduct(north:vector, up:vector).
+
+  local center is ship:position.
+
+  local a is body:geopositionOf(center + 5 * north:vector).
+  local b is body:geopositionOf(center - 3 * north:vector + 4 * east).
+  local c is body:geopositionOf(center - 3 * north:vector - 4 * east).
+
+  local a_vec is a:altitudePosition(a:terrainHeight).
+  local b_vec is b:altitudePosition(b:terrainHeight).
+  local c_vec is c:altitudePosition(c:terrainHeight).
+
+  return vectorCrossProduct(c_vec - a_vec, b_vec - a_vec):normalized.
 }
 
 main().
